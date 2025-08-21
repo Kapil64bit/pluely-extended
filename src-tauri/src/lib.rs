@@ -1,6 +1,14 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod window;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
+use std::process::Command;
+
+#[tauri::command]
+fn restart_app() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Command::new(&exe).spawn().map_err(|e| e.to_string())?;
+    std::process::exit(0);
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -17,14 +25,28 @@ pub fn run() {
     let builder = tauri::Builder::default()
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, get_app_version])
+    .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // Second instance attempt: if --restart present, restart existing instance
+        if args.iter().any(|a| a == "--restart") {
+            let _ = app.emit("pluely://pre-restart", ());
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = Command::new(exe).spawn();
+                std::process::exit(0);
+            }
+        } else {
+            // Bring window to front if just a normal second launch
+            if let Some(win) = app.get_webview_window("main").or_else(|| app.get_webview_window("pluely")).or_else(|| app.webview_windows().values().next().cloned()) {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }
+    }))
+        .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
 
-            // Register a global shortcut to toggle the app window (bring to front / hide)
-            // Uses CmdOrCtrl+Shift+L so it works across platforms (Ctrl on Windows/Linux, Cmd on macOS)
-            // Setup a native global hotkey on Windows: Ctrl+Shift+L
+            // Existing toggle hotkey (Ctrl+Shift+L) retained. Add restart hotkey Ctrl+Alt+Shift+P.
             #[cfg(target_os = "windows")]
             {
                 use std::thread;
@@ -35,17 +57,17 @@ pub fn run() {
                 thread::spawn(move || {
                     // Use winapi for Win32 API
                     use winapi::shared::windef::HWND;
-                    use winapi::um::winuser::{
-                        RegisterHotKey, GetMessageW, MSG, WM_HOTKEY, UnregisterHotKey,
-                    };
+                    use winapi::um::winuser::{RegisterHotKey, GetMessageW, MSG, WM_HOTKEY, UnregisterHotKey};
 
                     // Virtual-Key code for 'L'
                     const VK_L: u32 = 0x4C;
 
-                    // Register hotkey id 1 for Ctrl+Shift+L (toggle visibility)
-                    // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004
-                    let mods: u32 = (0x0002 | 0x0004) as u32;
-                    let _ = unsafe { RegisterHotKey(0 as HWND, 1, mods, VK_L) };
+                    // Hotkeys:
+                    // id 1: Ctrl+Shift+L (existing behavior toggle)
+                    // id 2: Ctrl+Alt+Shift+P (restart or launch via second instance semantics)
+                    // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_ALT = 0x0001
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 1, (0x0002 | 0x0004) as u32, VK_L) }; // toggle
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0004 | 0x0001) as u32, 'P' as u32) }; // restart
 
                     // Message loop to listen for WM_HOTKEY
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
@@ -79,6 +101,11 @@ pub fn run() {
                                         let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: -32000, y: -32000 }));
                                         let _ = win.set_skip_taskbar(true);
                                     }
+                                    }
+                            } else if id == 2 {
+                                // Restart: spawn self with --restart (will trigger single-instance callback)
+                                if let Ok(exe) = std::env::current_exe() {
+                                    let _ = Command::new(exe).arg("--restart").spawn();
                                 }
                 }
                         }
@@ -86,6 +113,7 @@ pub fn run() {
 
             // Unregister hotkey when loop exits
             let _ = unsafe { UnregisterHotKey(0 as HWND, 1) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 2) };
                 });
             }
             Ok(())

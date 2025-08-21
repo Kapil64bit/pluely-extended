@@ -267,6 +267,26 @@ npm install
 npm run tauri dev
 ```
 
+### 🔁 Global Hotkey (Launch / Restart) on Windows
+
+To be able to re-launch or restart Pluely with a keyboard shortcut even when it is not currently running (without any always-on background process), use a Windows shortcut hotkey:
+
+1. Build or install Pluely and run it once normally.
+2. Run the helper script (PowerShell):
+	```powershell
+	pwsh -ExecutionPolicy Bypass -File .\scripts\create-hotkey-shortcut.ps1
+	```
+3. This creates a Start Menu shortcut: `Pluely (Hotkey Restart).lnk` with target `pluely.exe --restart`.
+4. Default hotkey requested: `Ctrl+Alt+Shift+P`. If Windows drops the Shift modifier, it will fall back to `Ctrl+Alt+P` (Explorer limitation).
+5. You can change the hotkey anytime: Right‑click the shortcut → Properties → Shortcut key.
+
+What happens:
+- If Pluely is not running, the shortcut launches it.
+- If Pluely is running, launching with `--restart` triggers a safe restart via the single-instance plugin.
+
+No resident background exe or service is used, reducing the chance of triggering security software.
+
+
 ### Build for Production
 
 ```bash

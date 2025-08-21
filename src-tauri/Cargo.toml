@@ -31,6 +31,7 @@ tauri-plugin-updater = "2"  # Move this here
 winapi = { version = "0.3", features = ["winuser"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-macos-permissions = "2"
