@@ -50,7 +50,7 @@ export const Speech = ({
             disabled={!value.trim()}
             size="icon"
             className="shrink-0 h-11 w-11"
-            title="Submit OpenAI API Key"
+            aria-label="Submit OpenAI API Key"
           >
             <KeyIcon className="h-4 w-4" />
           </Button>
@@ -60,7 +60,7 @@ export const Speech = ({
             size="icon"
             variant="destructive"
             className="shrink-0 h-11 w-11"
-            title="Remove OpenAI API Key"
+            aria-label="Remove OpenAI API Key"
           >
             <TrashIcon className="h-4 w-4" />
           </Button>

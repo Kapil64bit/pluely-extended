@@ -51,7 +51,7 @@ export const ApiKeyInput = ({
             disabled={!value.trim()}
             size="icon"
             className="shrink-0 h-11 w-11"
-            title="Submit API Key"
+            aria-label="Submit API Key"
           >
             <KeyIcon className="h-4 w-4" />
           </Button>
@@ -61,7 +61,7 @@ export const ApiKeyInput = ({
             size="icon"
             variant="destructive"
             className="shrink-0 h-11 w-11"
-            title="Remove API Key"
+            aria-label="Remove API Key"
           >
             <TrashIcon className="h-4 w-4" />
           </Button>

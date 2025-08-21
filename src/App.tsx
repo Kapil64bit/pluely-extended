@@ -28,7 +28,8 @@ const App = () => {
 
   return (
     <div className="w-screen h-screen flex overflow-hidden justify-center items-start">
-      <Card className="w-full flex flex-row items-center gap-2 p-2">
+      {/* make the main card a draggable region for frameless Tauri window */}
+      <Card className="w-full flex flex-row items-center gap-2 p-2 window-drag">
         <Completion />
         <ChatHistory
           onSelectConversation={handleSelectConversation}

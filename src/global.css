@@ -118,3 +118,50 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Ensure the browser document doesn't paint a solid background or margins
+   so the Tauri transparent window shows through at the edges. */
+html,
+body,
+#root {
+  background-color: transparent !important;
+  margin: 0 !important;
+  height: 100%;
+}
+
+/* Draggable region helpers for frameless Tauri windows */
+.window-drag {
+  /* allow dragging the window by this region */
+  -webkit-app-region: drag;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Prevent interactive elements from being draggable so they remain clickable/selectable */
+.window-drag input,
+.window-drag textarea,
+.window-drag button,
+.window-drag [role="button"],
+.window-drag a,
+.window-drag select,
+.window-drag .no-drag {
+  -webkit-app-region: no-drag;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Make primary Card fully transparent so window borders don't show */
+[data-slot="card"] {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Force default cursor everywhere for stealth mode */
+/* This intentionally overrides pointer/text cursors so the arrow remains visible
+   across buttons, links and inputs during screen sharing. */
+*,
+*:before,
+*:after {
+  cursor: default !important;
+}

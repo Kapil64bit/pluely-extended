@@ -90,7 +90,7 @@ export const Completion = () => {
                 setEnableVAD(!enableVAD);
               }}
               className="cursor-pointer"
-              title="Toggle voice input"
+              aria-label="Toggle voice input"
             >
               <MicIcon className="h-4 w-4" />
             </Button>
@@ -190,7 +190,7 @@ export const Completion = () => {
                   }}
                   disabled={isLoading}
                   className="cursor-pointer"
-                  title="Copy response to clipboard"
+                  aria-label="Copy response to clipboard"
                 >
                   <CopyIcon />
                 </Button>
@@ -205,7 +205,7 @@ export const Completion = () => {
                     }
                   }}
                   className="cursor-pointer"
-                  title={isLoading ? "Cancel loading" : "Clear conversation"}
+                  aria-label={isLoading ? "Cancel loading" : "Clear conversation"}
                 >
                   <XIcon />
                 </Button>
@@ -244,7 +244,7 @@ export const Completion = () => {
           onClick={() => fileInputRef.current?.click()}
           disabled={isLoading}
           className="cursor-pointer"
-          title="Attach images"
+          aria-label="Attach images"
         >
           <PaperclipIcon className="h-4 w-4" />
         </Button>

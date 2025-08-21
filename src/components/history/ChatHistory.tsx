@@ -96,7 +96,6 @@ export const ChatHistory = ({
           size="icon"
           aria-label="View All Chat History"
           className="cursor-pointer"
-          title="View All Chat History"
         >
           <History className="h-4 w-4" />
         </Button>
@@ -120,7 +119,7 @@ export const ChatHistory = ({
                 setIsOpen(false);
               }}
               className="text-xs"
-              title="Start new chat"
+              aria-label="Start new chat"
             >
               New Chat
             </Button>
@@ -175,7 +174,7 @@ export const ChatHistory = ({
                             onClick={(e) =>
                               handleDeleteConversation(conversation.id, e)
                             }
-                            title="Delete conversation"
+                            aria-label="Delete conversation"
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
