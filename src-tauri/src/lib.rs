@@ -46,6 +46,71 @@ pub fn run() {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
 
+            // On Windows, create (idempotently) a Start Menu shortcut with a global hotkey so user can relaunch
+            // the app via Ctrl+Alt+Shift+P (Windows may degrade to Ctrl+Alt+P). This removes the need for an external script.
+            #[cfg(target_os = "windows")]
+            {
+                use std::{path::PathBuf, fs};
+                use windows::Win32::{
+                    UI::Shell::{IShellLinkW, ShellLink},
+                    System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, CoCreateInstance, CLSCTX_INPROC_SERVER, IPersistFile},
+                };
+                use windows::core::{Interface, PCWSTR};
+                use std::os::windows::ffi::OsStrExt;
+
+                fn wide(s: &str) -> Vec<u16> { std::ffi::OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect() }
+
+                let mut start_menu = PathBuf::from(std::env::var("APPDATA").unwrap_or_default());
+                if !start_menu.as_os_str().is_empty() {
+                    for seg in ["Microsoft","Windows","Start Menu","Programs"] { start_menu.push(seg); }
+                    let shortcut_path = start_menu.join("Pluely (Hotkey).lnk");
+                    let marker = start_menu.join(".pluely_hotkey_created");
+                    // Only attempt once (marker) or if shortcut missing.
+                    if !marker.exists() || !shortcut_path.exists() {
+                        if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok() {
+                            if let Ok(exe) = std::env::current_exe() {
+                                // Create directory if missing
+                                let _ = fs::create_dir_all(&start_menu);
+                                unsafe {
+                                    // Create ShellLink
+                                    if let Ok(shell_link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) {
+                                        // Ensure Target is the executable only and Arguments is set separately to "--restart".
+                                        let path_str = exe.as_os_str().to_string_lossy().into_owned();
+                                        let args_str = "--restart";
+                                        eprintln!("Pluely: creating shortcut target='{}' args='{}'", path_str, args_str);
+                                        let path_w = wide(&path_str);
+                                        let _ = shell_link.SetPath(PCWSTR(path_w.as_ptr()));
+                                        let args_w = wide(args_str);
+                                        let _ = shell_link.SetArguments(PCWSTR(args_w.as_ptr()));
+                                        let desc_w = wide("Pluely launch / restart via global hotkey");
+                                        let _ = shell_link.SetDescription(PCWSTR(desc_w.as_ptr()));
+                                        // Attempt to set working directory
+                                        if let Some(dir) = exe.parent() { let wd_w = wide(&dir.to_string_lossy()); let _ = shell_link.SetWorkingDirectory(PCWSTR(wd_w.as_ptr())); }
+                                        // Set icon
+                                        let _ = shell_link.SetIconLocation(PCWSTR(path_w.as_ptr()), 0);
+                                        // Set hotkey: Windows expects LOWORD = key code, HIWORD = modifiers. Ctrl=0x02, Alt=0x04, Shift=0x01 per .lnk HOTKEYF flags.
+                                        // We want Ctrl+Alt+Shift+P. Virtual key for P is 0x50.
+                                        // Format: (modifiers << 8) | vk
+                                        // Use Ctrl+Alt+P for the .lnk hotkey (Shift often gets dropped by Windows); set only the no-shift value.
+                                        let no_shift: u16 = ((0x02 | 0x04) << 8) | 0x50; // Ctrl+Alt+P
+                                        let _ = shell_link.SetHotkey(no_shift);
+                                        // Persist to file
+                                        if let Ok(persist) = shell_link.cast::<IPersistFile>() {
+                                            let lnk_w = wide(&shortcut_path.to_string_lossy());
+                                            if persist.Save(PCWSTR(lnk_w.as_ptr()), true).is_ok() {
+                                                let _ = fs::write(&marker, b"created");
+                                            } else {
+                                                eprintln!("Pluely: failed to save shortcut");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Existing toggle hotkey (Ctrl+Shift+L) retained. Add restart hotkey Ctrl+Alt+Shift+P.
             #[cfg(target_os = "windows")]
             {
@@ -64,10 +129,10 @@ pub fn run() {
 
                     // Hotkeys:
                     // id 1: Ctrl+Shift+L (existing behavior toggle)
-                    // id 2: Ctrl+Alt+Shift+P (restart or launch via second instance semantics)
+                    // id 2: Ctrl+Alt+P (restart or launch via second instance semantics)
                     // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_ALT = 0x0001
                     let _ = unsafe { RegisterHotKey(0 as HWND, 1, (0x0002 | 0x0004) as u32, VK_L) }; // toggle
-                    let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0004 | 0x0001) as u32, 'P' as u32) }; // restart
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0001) as u32, 'P' as u32) }; // restart
 
                     // Message loop to listen for WM_HOTKEY
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
