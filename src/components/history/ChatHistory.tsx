@@ -104,7 +104,7 @@ export const ChatHistory = ({
       <PopoverContent
         align="end"
         side="bottom"
-        className="select-none w-screen p-0 border overflow-hidden border-input/50"
+        className="select-none w-screen p-0 border overflow-hidden border-input/50 bg-popover/20 backdrop-blur-sm"
         sideOffset={8}
       >
         <div className="border-b border-input/50 p-4">
@@ -146,9 +146,9 @@ export const ChatHistory = ({
                 {conversations.map((conversation) => (
                   <div
                     key={conversation.id}
-                    className={`group flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all hover:bg-muted/50 ${
+                    className={`group flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all hover:bg-muted/30 backdrop-blur-sm ${
                       conversation.id === currentConversationId
-                        ? "bg-muted border-primary/20"
+                        ? "bg-muted/30 border-primary/20"
                         : "border-transparent hover:border-input/50"
                     }`}
                     onClick={() => handleSelectConversation(conversation)}
@@ -157,7 +157,7 @@ export const ChatHistory = ({
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="text-sm font-medium truncate leading-5">
+                        <h3 className="text-sm font-medium leading-5 break-words whitespace-normal">
                           {conversation.title}
                         </h3>
                         <div className="flex items-center gap-1">

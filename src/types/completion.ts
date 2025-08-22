@@ -13,6 +13,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   attachedFiles?: AttachedFile[];
+  structured?: import('./structured').StructuredAIResponse; // parsed structured JSON if available
 }
 
 export interface ChatConversation {
@@ -31,6 +32,7 @@ export interface CompletionState {
   attachedFiles: AttachedFile[];
   currentConversationId: string | null;
   conversationHistory: ChatMessage[];
+  pendingUserMessage?: string; // message currently being processed before assistant reply saved
 }
 
 // Provider-related types

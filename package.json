@@ -1,7 +1,7 @@
 {
   "name": "pluely",
   "private": false,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing.",
   "author": {
     "name": "Srikanth Nani",
@@ -61,6 +61,7 @@
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+  "shiki": "^0.13.0",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.12"
   },

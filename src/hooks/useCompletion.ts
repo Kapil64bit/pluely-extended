@@ -9,12 +9,8 @@ import {
   getConversation,
   generateConversationTitle,
 } from "@/lib";
-import {
-  AttachedFile,
-  CompletionState,
-  ChatMessage,
-  ChatConversation,
-} from "@/types";
+import { AttachedFile, CompletionState, ChatMessage, ChatConversation } from "@/types";
+import { StructuredAIResponse, normalizeStructured } from "@/types/structured";
 
 export const useCompletion = () => {
   const [state, setState] = useState<CompletionState>({
@@ -25,6 +21,7 @@ export const useCompletion = () => {
     attachedFiles: [],
     currentConversationId: null,
     conversationHistory: [],
+  pendingUserMessage: undefined,
   });
   const [micOpen, setMicOpen] = useState(false);
   const [enableVAD, setEnableVAD] = useState(false);
@@ -125,11 +122,24 @@ export const useCompletion = () => {
 
       abortControllerRef.current = new AbortController();
 
+      // Prepare user message (append to conversation immediately for optimistic UI)
+      const timestamp = Date.now();
+      const userMsg: ChatMessage = {
+        id: `msg_${timestamp}_user`,
+        role: "user",
+        content: input,
+        timestamp,
+      };
+
       setState((prev) => ({
         ...prev,
         isLoading: true,
         error: null,
-        response: "",
+        response: "", // track current assistant partial
+        // add optimistic user message to history (exclude if same id already)
+        conversationHistory: [...prev.conversationHistory, userMsg],
+        pendingUserMessage: input,
+        input: "", // clear input immediately for next question
       }));
 
       try {
@@ -142,6 +152,21 @@ export const useCompletion = () => {
         );
 
         let fullResponse = "";
+        // Create a temporary assistant message in history for streaming updates
+        const assistantTempId = `msg_${timestamp}_assistant_temp`;
+        setState((prev) => ({
+          ...prev,
+          conversationHistory: [
+            ...prev.conversationHistory,
+            // temp assistant message placeholder (will be replaced at end)
+            {
+              id: assistantTempId,
+              role: "assistant",
+              content: "",
+              timestamp: timestamp + 1,
+            },
+          ],
+        }));
 
         await streamCompletion(
           provider,
@@ -153,6 +178,9 @@ export const useCompletion = () => {
             setState((prev) => ({
               ...prev,
               response: prev.response + chunk,
+              conversationHistory: prev.conversationHistory.map((m) =>
+                m.id === assistantTempId ? { ...m, content: prev.response + chunk } : m
+              ),
             }));
           },
           (error) => {
@@ -167,14 +195,73 @@ export const useCompletion = () => {
 
         setState((prev) => ({ ...prev, isLoading: false }));
 
-        // Save the conversation after successful completion
+        // Save the conversation after successful completion (replace temp assistant message)
         if (fullResponse) {
-          saveCurrentConversation(input, fullResponse, state.attachedFiles);
-          // Clear input and attached files after saving
+          // Attempt to parse structured JSON even if wrapped in markdown/code fences or extra prose
+          let structured: StructuredAIResponse | undefined;
+
+          const attemptParse = (candidate: string) => {
+            try {
+              const parsed = JSON.parse(candidate);
+              const normalized = normalizeStructured(parsed);
+              if (normalized) structured = normalized;
+              return true;
+            } catch {
+              return false;
+            }
+          };
+
+          let raw = fullResponse.trim();
+
+          // 1. Direct whole-string parse (original behavior)
+          if (!(raw.startsWith('{') && raw.endsWith('}') && attemptParse(raw))) {
+            // 2. Strip surrounding markdown code fences if present
+            const fenceMatch = raw.match(/^```(?:json)?\n([\s\S]*?)\n```$/i);
+            if (fenceMatch) {
+              const inner = fenceMatch[1].trim();
+              attemptParse(inner);
+            }
+
+            // 3. Find first fenced json block anywhere
+            if (!structured) {
+              const multiFence = raw.match(/```json\n([\s\S]*?)```/i);
+              if (multiFence) {
+                attemptParse(multiFence[1].trim());
+              }
+            }
+
+            // 4. Heuristic: extract largest balanced JSON object substring
+            if (!structured) {
+              const firstBrace = raw.indexOf('{');
+              const lastBrace = raw.lastIndexOf('}');
+              if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                const candidate = raw.substring(firstBrace, lastBrace + 1);
+                // Try progressive shrinking from the end if parsing fails (handles trailing junk after last brace)
+                if (!attemptParse(candidate)) {
+                  // Brace depth approach (simplified)
+                  let depth = 0;
+                  for (let end = firstBrace; end < raw.length; end++) {
+                    const ch = raw[end];
+                    if (ch === '{') depth++;
+                    else if (ch === '}') {
+                      depth--;
+                      if (depth === 0) {
+                        const sub = raw.substring(firstBrace, end + 1);
+                        if (attemptParse(sub)) break;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          saveCurrentConversation(userMsg.content, fullResponse, state.attachedFiles, structured);
+          // Clear attached files after saving
           setState((prev) => ({
             ...prev,
-            input: "",
             attachedFiles: [],
+            pendingUserMessage: undefined,
           }));
         }
       } catch (error) {
@@ -197,13 +284,14 @@ export const useCompletion = () => {
   }, []);
 
   const reset = useCallback(() => {
+    // Explicit close of the conversation panel: do NOT delete history unless starting new chat
     cancel();
     setState((prev) => ({
       ...prev,
-      input: "",
       response: "",
       error: null,
-      attachedFiles: [],
+      isLoading: false,
+      // keep conversationHistory & currentConversationId intact
     }));
   }, [cancel]);
 
@@ -222,7 +310,7 @@ export const useCompletion = () => {
       currentConversationId: conversation.id,
       conversationHistory: conversation.messages,
       input: "",
-      response: "",
+  response: "", // clear streaming buffer
       error: null,
       isLoading: false,
     }));
@@ -245,7 +333,8 @@ export const useCompletion = () => {
     (
       userMessage: string,
       assistantResponse: string,
-      _attachedFiles: AttachedFile[] // Prefixed with _ to indicate intentionally unused
+      _attachedFiles: AttachedFile[], // Prefixed with _ to indicate intentionally unused
+      structured?: StructuredAIResponse
     ) => {
       const conversationId =
         state.currentConversationId ||
@@ -265,13 +354,25 @@ export const useCompletion = () => {
         role: "assistant",
         content: assistantResponse,
         timestamp: timestamp + 1,
+        structured,
       };
 
-      const newMessages = [...state.conversationHistory, userMsg, assistantMsg];
-      const title =
-        state.conversationHistory.length === 0
-          ? generateConversationTitle(userMessage)
-          : undefined;
+      // Remove any temporary assistant messages created during streaming
+      const filteredHistory = state.conversationHistory.filter(
+        (m) => !m.id.includes("_assistant_temp")
+      );
+
+      // Avoid duplicating the user message if it was already optimistically added
+      const last = filteredHistory[filteredHistory.length - 1];
+      const shouldAppendUser = !(last && last.role === "user" && last.content === userMessage);
+
+      const newMessages = [
+        ...filteredHistory,
+        ...(shouldAppendUser ? [userMsg] : []),
+        assistantMsg,
+      ];
+
+      const title = filteredHistory.length === 0 ? generateConversationTitle(userMessage) : undefined;
 
       const conversation: ChatConversation = {
         id: conversationId,
@@ -281,7 +382,7 @@ export const useCompletion = () => {
             ? getConversation(state.currentConversationId)?.title ||
               generateConversationTitle(userMessage)
             : generateConversationTitle(userMessage)),
-        messages: newMessages,
+  messages: newMessages,
         createdAt: state.currentConversationId
           ? getConversation(state.currentConversationId)?.createdAt || timestamp
           : timestamp,
@@ -360,5 +461,6 @@ export const useCompletion = () => {
     conversationHistory: state.conversationHistory,
     loadConversation,
     startNewConversation,
+  pendingUserMessage: state.pendingUserMessage,
   };
 };

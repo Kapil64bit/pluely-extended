@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "responseId": "example-theoretical-acid",
+  "responseType": "theoretical",
+  "questionEcho": "Explain ACID properties",
+  "interviewTone": true,
+  "meta": { "confidence": 0.85, "difficulty": "medium", "tags": ["databases","transactions"] },
+  "answer": {"summary": "ACID guarantees reliable transactions via atomicity, consistency, isolation, durability.","detailed": "Atomicity ensures all or nothing...","keyPoints":["Atomicity all-or-nothing","Consistency rules preserved"],"pitfalls":["Confusing consistency domain vs eventual"]},
+  "followUps": [{"prompt":"Describe isolation anomalies","purpose":"Assess concurrency depth"}]
+}

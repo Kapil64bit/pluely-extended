@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "responseId": "example-coding-two-sum",
+  "responseType": "coding",
+  "questionEcho": "Two Sum: return indices of two numbers adding to target",
+  "interviewTone": true,
+  "meta": { "confidence": 0.9, "difficulty": "easy", "tags": ["array","hashmap"] },
+  "answer": {
+    "solutionOverview": "Use a hashmap of seen value->index and check complement in one pass.",
+    "approachSteps": ["Init empty map","For each index i compute complement","If complement in map return pair","Else store current value"],
+    "timeComplexity": "O(n)",
+    "spaceComplexity": "O(n)",
+    "constraints": {"inputSizes":"1 <= n <= 1e5","valueRanges":"-1e9 <= nums[i] <= 1e9","edgeCases":["minimum size","duplicates"],"assumptions":["exactly one solution"]},
+    "variants": ["Brute force O(n^2)","Sort + two pointers O(n log n)"],
+    "code": {"language":"typescript","style":"interview","main":"function twoSum(nums: number[], target: number): [number, number] {\n  // Map from number value to its index seen so far\n  const map = new Map<number, number>();\n  for (let i = 0; i < nums.length; i++) {\n    const complement = target - nums[i]; // value we need\n    if (map.has(complement)) {\n      return [map.get(complement)!, i]; // non-null because we checked has\n    }\n    map.set(nums[i], i); // store after check to avoid using same index twice\n  }\n  throw new Error('No solution'); // per assumption should not happen\n}"},
+    "tests": [{"input":"[2,7,11,15], target=9","expected":"[0,1]"}],
+    "explanationNotes": ["Hash map average O(1) lookups"]
+  },
+  "followUps": [{"prompt":"What if multiple solutions?","purpose":"Probe handling of all pairs"}]
+}

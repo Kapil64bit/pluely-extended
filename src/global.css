@@ -165,3 +165,10 @@ body,
 *:after {
   cursor: default !important;
 }
+
+/* Ensure long unbroken strings (like long code tokens or URLs) wrap instead of forcing horizontal overflow */
+.break-words, [data-chat-message] {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}

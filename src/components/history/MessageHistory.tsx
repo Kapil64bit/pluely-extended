@@ -48,7 +48,7 @@ export const MessageHistory = ({
       <PopoverContent
         align="end"
         side="bottom"
-        className="select-none w-96 p-0 border overflow-hidden border-input/50"
+        className="select-none w-96 p-0 border overflow-hidden border-input/50 bg-popover/20 backdrop-blur-sm"
         sideOffset={8}
       >
         <div className="border-b border-input/50 p-4">
@@ -91,10 +91,10 @@ export const MessageHistory = ({
             {conversationHistory.map((message) => (
               <div
                 key={message.id}
-                className={`p-3 rounded-lg ${
+                className={`p-3 rounded-lg break-words whitespace-pre-wrap [&_*]:break-words [&_*]:whitespace-pre-wrap ${
                   message.role === "user"
-                    ? "bg-primary/10 border-l-4 border-primary"
-                    : "bg-muted/50"
+                    ? "bg-primary/10 backdrop-blur-sm border-l-4 border-primary"
+                    : "bg-muted/30 backdrop-blur-sm"
                 }`}
               >
                 <div className="flex items-center gap-2 mb-2">

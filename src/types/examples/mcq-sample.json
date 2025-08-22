@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "responseId": "example-mcq-ds",
+  "responseType": "mcq",
+  "questionEcho": "Which DS has average O(1) lookup?",
+  "interviewTone": true,
+  "meta": { "confidence": 0.95, "difficulty": "easy", "tags": ["data-structures"] },
+  "answer": {"question": "Which data structure offers average O(1) lookup?","options":[{"id":"A","text":"BST"},{"id":"B","text":"Hash Table"},{"id":"C","text":"Sorted Array"},{"id":"D","text":"Linked List"}],"correctOptionId":"B","justification":"Hash tables average O(1) lookups via hashing.","eliminations":[{"optionId":"A","reason":"BST is O(log n) average"}],"quickRecallHook":"Hash = constant"},
+  "followUps": [{"prompt":"When does hashing degrade?","purpose":"Probe worst-case"}]
+}
