@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod window;
+mod screenshot;
 use tauri::{Manager, Emitter};
 use std::process::Command;
 
@@ -41,7 +42,7 @@ pub fn run() {
             }
         }
     }))
-        .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app])
+    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, screenshot::invoke_area_screenshot])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
@@ -149,9 +150,26 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             {
                 use std::thread;
+                use tauri::Manager;
 
                 // Clone the AppHandle for the background thread
                 let ah = app.handle().clone();
+
+                // Parse configurable hotkey from env (format CTRL+H or just H; only supporting Ctrl+H now for simplicity)
+                let configured = std::env::var("PLUELY_HOTKEY").unwrap_or_else(|_| "CTRL+H".to_string());
+                let (hotkey_vk, hotkey_mods) = {
+                    let upper = configured.to_ascii_uppercase();
+                    let parts: Vec<&str> = upper.split('+').collect();
+                    let mut mods = 0u32; let mut key: Option<u32> = None;
+                    for p in parts { match p {
+                        "CTRL" => mods |= 0x0002,
+                        "ALT" => mods |= 0x0001,
+                        "SHIFT" => mods |= 0x0004,
+                        k if k.len()==1 => { key = Some(k.chars().next().unwrap() as u32); },
+                        _ => {}
+                    }}
+                    (key.unwrap_or('H' as u32), if mods==0 { 0x0002 } else { mods }) // default to CTRL if none provided
+                };
 
                 thread::spawn(move || {
                     // Use winapi for Win32 API
@@ -166,11 +184,13 @@ pub fn run() {
                     // id 2: Ctrl+Alt+P (launch / focus existing instance - single-instance will bring to front)
                     // id 3: Ctrl+Alt+Shift+P (full restart)
                     // id 4: Ctrl+Alt+Q (quit application)
+                    // id 5: Configurable screenshot hotkey (default Ctrl+H)
                     // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_ALT = 0x0001
                     let _ = unsafe { RegisterHotKey(0 as HWND, 1, (0x0002 | 0x0004) as u32, VK_L) }; // toggle
                     let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0001) as u32, 'P' as u32) }; // launch/focus
                     let _ = unsafe { RegisterHotKey(0 as HWND, 3, (0x0002 | 0x0001 | 0x0004) as u32, 'P' as u32) }; // restart
                     let _ = unsafe { RegisterHotKey(0 as HWND, 4, (0x0002 | 0x0001) as u32, 'Q' as u32) }; // quit
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 5, hotkey_mods, hotkey_vk) }; // screenshot
 
                     // Message loop to listen for WM_HOTKEY
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
@@ -240,6 +260,24 @@ pub fn run() {
                                 }
                                 // Then exit the app
                                 ah.exit(0);
+                            } else if id == 5 {
+                                // Screenshot capture in blocking fashion on this thread; spawn new thread to not block message loop.
+                                let ah_inner = ah.clone();
+                                println!("[backend] Hotkey 5 pressed - initiating screenshot capture");
+                                std::thread::spawn(move || {
+                                    println!("[backend] Screenshot thread started");
+                                    if let Ok(Some(b64)) = screenshot::invoke_area_screenshot() {
+                                        println!("[backend] Screenshot capture successful, base64 length: {}", b64.len());
+                                        println!("[backend] Emitting Tauri event 'pluely://screenshot-captured'");
+                                        let emit_result = ah_inner.emit("pluely://screenshot-captured", b64);
+                                        match emit_result {
+                                            Ok(_) => println!("[backend] Tauri event emitted successfully"),
+                                            Err(e) => println!("[backend] Failed to emit Tauri event: {:?}", e),
+                                        }
+                                    } else {
+                                        println!("[backend] Screenshot capture failed or returned None");
+                                    }
+                                });
                             }
                         }
                     }
@@ -248,6 +286,8 @@ pub fn run() {
             let _ = unsafe { UnregisterHotKey(0 as HWND, 1) };
             let _ = unsafe { UnregisterHotKey(0 as HWND, 2) };
             let _ = unsafe { UnregisterHotKey(0 as HWND, 3) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 4) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 5) };
                 });
             }
             Ok(())

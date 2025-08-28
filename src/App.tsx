@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Card, Settings, Completion, ChatHistory } from "./components";
 import { ChatConversation } from "./types";
 import { check } from "@tauri-apps/plugin-updater";
+import { listen } from "@tauri-apps/api/event";
 
 const App = () => {
   const handleSelectConversation = (conversation: ChatConversation) => {
@@ -15,9 +16,35 @@ const App = () => {
     );
   };
 
-  // Check for updates
+  // Setup update check and screenshot listener
   useEffect(() => {
+    const appUseEffectId = `app_useEffect_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[DEBUG-${appUseEffectId}] App useEffect initialized`);
+
     check();
+    let unlisten: (() => void) | undefined;
+    listen<string>("pluely://screenshot-captured", (e) => {
+      const listenId = `listen_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const b64 = e.payload;
+      console.log(`[DEBUG-${listenId}] Tauri event 'pluely://screenshot-captured' received`);
+      console.log(`[DEBUG-${listenId}] Base64 payload length:`, b64?.length || 'undefined');
+
+      if (b64) {
+        console.log(`[DEBUG-${listenId}] Dispatching DOM event 'pluely-screenshot'`);
+        window.dispatchEvent(new CustomEvent("pluely-screenshot", { detail: { base64: b64 } }));
+        console.log(`[DEBUG-${listenId}] DOM event dispatched successfully`);
+      } else {
+        console.log(`[DEBUG-${listenId}] No base64 payload, skipping DOM event dispatch`);
+      }
+    }).then((f) => {
+      unlisten = f;
+      console.log(`[DEBUG-${appUseEffectId}] Tauri event listener registered`);
+    });
+
+    return () => {
+      console.log(`[DEBUG-${appUseEffectId}] App useEffect cleanup - removing Tauri listener`);
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const handleNewConversation = () => {

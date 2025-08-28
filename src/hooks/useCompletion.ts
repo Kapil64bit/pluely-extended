@@ -461,6 +461,7 @@ export const useCompletion = () => {
     conversationHistory: state.conversationHistory,
     loadConversation,
     startNewConversation,
+    saveCurrentConversation,
   pendingUserMessage: state.pendingUserMessage,
   };
 };

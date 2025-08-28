@@ -22,6 +22,12 @@ import remarkGfm from "remark-gfm";
 import { highlightCode } from "@/lib/highlight";
 import { Speech } from "./Speech";
 import { MessageHistory } from "../history";
+import { initScreenshotAI, requestAnswerFromScreenshot } from "@/lib/screenshot-ai";
+
+// Session-level set of processed screenshot signatures to suppress duplicate events
+const processedScreenshotSigs = new Set<string>();
+// Global flag to prevent concurrent screenshot processing
+let isProcessingScreenshot = false;
 
 export const Completion = () => {
   const {
@@ -45,6 +51,7 @@ export const Completion = () => {
     currentConversationId,
     conversationHistory,
     startNewConversation,
+    saveCurrentConversation,
   } = useCompletion();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -119,6 +126,186 @@ export const Completion = () => {
     response !== "" ||
     error !== null;
   const isPopoverOpen = hasConversation; // controlled open
+
+  // Initialize screenshot listener
+  useEffect(() => {
+    const useEffectId = `useEffect_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[DEBUG-${useEffectId}] useEffect for screenshot listener initialized`);
+
+    const cleanup = initScreenshotAI(async (b64) => {
+      const callbackId = `callback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      console.log(`[DEBUG-${callbackId}] Screenshot callback triggered, base64 length:`, b64.length);
+      console.log(`[DEBUG-${callbackId}] Current isProcessingScreenshot flag:`, isProcessingScreenshot);
+      console.log(`[DEBUG-${callbackId}] Current processedScreenshotSigs size:`, processedScreenshotSigs.size);
+
+      // Check global processing flag first
+      if (isProcessingScreenshot) {
+        console.log(`[DEBUG-${callbackId}] Screenshot ignored: another screenshot is already being processed`);
+        return;
+      }
+
+      // Create a robust signature using hash of first 100 chars + total length + timestamp window
+      const now = Date.now();
+      const prefix = b64.slice(0, 100);
+      const sig = `${btoa(prefix).slice(0, 20)}::${b64.length}::${Math.floor(now / 5000)}`; // 5-second windows
+
+      console.log(`[DEBUG-${callbackId}] Generated signature:`, sig);
+      console.log(`[DEBUG-${callbackId}] Checking if signature exists in set:`, processedScreenshotSigs.has(sig));
+
+      if (processedScreenshotSigs.has(sig)) {
+        console.log(`[DEBUG-${callbackId}] Duplicate screenshot event suppressed (signature already processed):`, sig);
+        return;
+      }
+
+      // Also check localStorage as backup
+      const lsKey = `screenshot_processed_${sig}`;
+      const lsValue = localStorage.getItem(lsKey);
+      console.log(`[DEBUG-${callbackId}] localStorage check for key:`, lsKey, "value:", lsValue);
+
+      if (lsValue) {
+        console.log(`[DEBUG-${callbackId}] Duplicate screenshot event suppressed (localStorage):`, sig);
+        return;
+      }
+
+      // Set processing flag
+      console.log(`[DEBUG-${callbackId}] Setting isProcessingScreenshot to true`);
+      isProcessingScreenshot = true;
+      processedScreenshotSigs.add(sig);
+      localStorage.setItem(lsKey, '1');
+
+      console.log(`[DEBUG-${callbackId}] Added signature to set, new size:`, processedScreenshotSigs.size);
+      console.log(`[DEBUG-${callbackId}] Processing new screenshot, base64 length:`, b64.length);
+      // Pull unified settings blob
+      const settingsRaw = localStorage.getItem("settings");
+      let settings: any = {};
+      try { if (settingsRaw) settings = JSON.parse(settingsRaw); } catch {}
+      const { selectedProvider, apiKey, selectedModel, customModel, isApiKeySubmitted } = settings;
+      console.log("[completion] Settings loaded:", { selectedProvider, hasApiKey: !!apiKey, selectedModel, customModel, isApiKeySubmitted });
+
+      if (!selectedProvider) { pushToast("Select provider first"); return; }
+      if (!apiKey || !isApiKeySubmitted) { pushToast("API key missing for screenshot"); return; }
+      // Resolve provider config
+      const { providers } = await import("@/config");
+      const provider = providers.find(p => p.id === selectedProvider);
+      if (!provider) { pushToast("Provider config missing"); return; }
+      const model = (selectedModel || customModel || provider.defaultModel || "").replace(/^models\//, "");
+      if (!model) { pushToast("Model not set"); return; }
+
+      console.log("[completion] Processing screenshot and requesting AI answer...");
+      // Don't start new conversation - continue existing or create conversation ID if needed
+      if (!currentConversationId) {
+        // Create a new conversation ID if we don't have one
+        const newConversationId = `conv_${Date.now()}`;
+        setState((s: any) => ({ ...s, currentConversationId: newConversationId }));
+      }
+      setInput("");
+
+      // Add screenshot as user message to conversation history
+      const timestamp = Date.now();
+      const screenshotMsg: any = {
+        id: `msg_${timestamp}_user`,
+        role: "user",
+        content: "📸 Screenshot analysis requested",
+        timestamp,
+      };
+
+      // Add temporary assistant message for streaming
+      const assistantTempId = `msg_${timestamp}_assistant_temp`;
+      const tempAssistantMsg: any = {
+        id: assistantTempId,
+        role: "assistant",
+        content: "",
+        timestamp: timestamp + 1,
+      };
+
+      setState((s: any) => ({
+        ...s,
+        conversationHistory: [...s.conversationHistory, screenshotMsg, tempAssistantMsg],
+        isLoading: true,
+        error: null,
+      }));
+
+      // Basic streaming into conversation by appending to response state via hook's mechanisms
+      let aggregated = "";
+      await requestAnswerFromScreenshot(b64, {
+        provider,
+        model,
+        apiKey,
+        onChunk: (c) => {
+          console.log("[completion] Received chunk:", c);
+          aggregated += c;
+          console.log("[completion] Current aggregated length:", aggregated.length);
+          setState((s: any) => ({
+            ...s,
+            conversationHistory: s.conversationHistory.map((m: any) =>
+              m.id === assistantTempId ? { ...m, content: aggregated } : m
+            ),
+          }));
+        },
+        onError: (e) => {
+          console.error("[completion] Screenshot AI error:", e);
+          setState((s: any) => ({
+            ...s,
+            error: e,
+            isLoading: false,
+            conversationHistory: s.conversationHistory.map((m: any) =>
+              m.id === assistantTempId ? { ...m, content: `Error: ${e}` } : m
+            ),
+          }));
+          pushToast(e);
+          // Reset processing flag on error
+          isProcessingScreenshot = false;
+        },
+      });
+
+      // Mark as completed & persist using freshest state (avoid closure staleness & double saves)
+      setState((s: any) => {
+        const finalAssistant = s.conversationHistory.find((m: any) => m.id === assistantTempId);
+        if (finalAssistant && finalAssistant.content) {
+          // Save only if last user message with same content not already paired with an assistant answer
+          const existingPair = s.conversationHistory.some((m: any) => m.role === 'assistant' && m.content === finalAssistant.content && m.timestamp === finalAssistant.timestamp);
+          if (!existingPair) {
+            // Defer save outside synchronous state mutation
+            setTimeout(() => {
+              saveCurrentConversation(
+                screenshotMsg.content,
+                finalAssistant.content,
+                [],
+                undefined
+              );
+            }, 0);
+          }
+        }
+        return { ...s, isLoading: false };
+      });
+
+      console.log("[completion] Screenshot AI request completed, final response length:", aggregated.length);
+      
+      // Reset processing flag
+      isProcessingScreenshot = false;
+      
+      // Periodic cleanup of old signatures (keep memory usage low)
+      if (processedScreenshotSigs.size > 100) {
+        // Clear all signatures older than 10 minutes
+        const tenMinAgo = Date.now() - 600000;
+        const toRemove: string[] = [];
+        processedScreenshotSigs.forEach(sig => {
+          try {
+            const timestamp = parseInt(sig.split('::').pop() || '0') * 5000;
+            if (timestamp < tenMinAgo) {
+              toRemove.push(sig);
+            }
+          } catch (e) {
+            toRemove.push(sig);
+          }
+        });
+        toRemove.forEach(sig => processedScreenshotSigs.delete(sig));
+      }
+    });
+
+    // Cleanup function
+    return cleanup;
+  }, []);
 
   return (
     <>

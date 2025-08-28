@@ -155,6 +155,10 @@ export const streamCompletion = async (
   onError: (error: string) => void,
   abortController: AbortController
 ) => {
+  const apiCallId = `api_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  console.log(`[DEBUG-${apiCallId}] streamCompletion called for provider:`, provider.id, "model:", model);
+  console.log(`[DEBUG-${apiCallId}] Payload keys:`, Object.keys(payload));
+
   try {
     let url = `${provider.baseUrl}${provider.chatEndpoint}`;
 
@@ -162,6 +166,8 @@ export const streamCompletion = async (
     if (provider.id === "gemini") {
       url = url.replace("${model}", model);
     }
+
+    console.log(`[DEBUG-${apiCallId}] Final URL:`, url);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -182,6 +188,9 @@ export const streamCompletion = async (
       headers["anthropic-dangerous-direct-browser-access"] = "true";
       headers["anthropic-version"] = "2023-06-01";
     }
+
+    console.log(`[DEBUG-${apiCallId}] Headers:`, Object.keys(headers));
+    console.log(`[DEBUG-${apiCallId}] About to make fetch request...`);
 
     // prepare request body
     const requestBody = {
@@ -212,6 +221,9 @@ export const streamCompletion = async (
       requestBody.stream = true;
     }
 
+    console.log(`[DEBUG-${apiCallId}] Making HTTP request to:`, url);
+    console.log(`[DEBUG-${apiCallId}] Request body size:`, JSON.stringify(requestBody).length, "characters");
+
     const response = await fetch(url, {
       method: "POST",
       headers,
@@ -219,12 +231,17 @@ export const streamCompletion = async (
       signal: abortController.signal,
     });
 
+    console.log(`[DEBUG-${apiCallId}] HTTP response status:`, response.status, response.statusText);
+
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`[DEBUG-${apiCallId}] API Error response:`, errorText);
       throw new Error(
         `API Error: ${response.status} ${response.statusText}\n${errorText}`
       );
     }
+
+    console.log(`[DEBUG-${apiCallId}] Response OK, starting to read stream...`);
 
     const reader = response.body?.getReader();
     if (!reader) {
@@ -233,10 +250,14 @@ export const streamCompletion = async (
 
     const decoder = new TextDecoder();
     let buffer = "";
+    let chunkCount = 0;
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        console.log(`[DEBUG-${apiCallId}] Stream completed, total chunks:`, chunkCount);
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -264,16 +285,20 @@ export const streamCompletion = async (
             }
 
             if (content) {
+              chunkCount++;
+              console.log(`[DEBUG-${apiCallId}] Received content chunk ${chunkCount}, length:`, content.length);
               onChunk(content);
             }
           } catch (e) {
-            console.warn("Failed to parse streaming chunk:", e);
+            console.warn(`[DEBUG-${apiCallId}] Failed to parse streaming chunk:`, e);
           }
         }
       }
     }
   } catch (error: unknown) {
+    console.error(`[DEBUG-${apiCallId}] Error in streamCompletion:`, error);
     if (error instanceof Error && error.name === "AbortError") {
+      console.log(`[DEBUG-${apiCallId}] Request was aborted`);
       return; // user cancelled, don't show error
     }
     onError(error instanceof Error ? error.message : "An error occurred");
