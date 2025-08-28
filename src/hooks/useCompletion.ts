@@ -256,6 +256,7 @@ export const useCompletion = () => {
             }
           }
 
+          console.log(`[DEBUG-regular-conversation] Saving regular conversation: ${userMsg.content.substring(0, 50)}...`);
           saveCurrentConversation(userMsg.content, fullResponse, state.attachedFiles, structured);
           // Clear attached files after saving
           setState((prev) => ({

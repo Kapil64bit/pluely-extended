@@ -3,7 +3,7 @@
 This document describes the architecture and usage of the stealth area screenshot + AI answer workflow implemented for Windows.
 
 ## Overview Flow
-1. User presses the global hotkey (default `CTRL+H`, configurable via `PLUELY_HOTKEY`).
+1. User presses the global hotkey (default `CTRL+ALT+S`, configurable via `PLUELY_HOTKEY`).
 2. A fully transparent, click‑through, layered overlay window spans the virtual screen.
 3. User drag‑selects a rectangle (no visible adorners are painted to keep the overlay visually and capture‑stealth).
 4. Mouse up finalizes selection; the selected region of the real desktop is captured via GDI BitBlt into a 32‑bit DIB, converted to RGBA, PNG‑encoded, Base64.
@@ -23,7 +23,7 @@ This document describes the architecture and usage of the stealth area screensho
 ## Hotkey Configuration
 Set environment variable before launching app:
 ```
-PLUELY_HOTKEY=CTRL+H
+PLUELY_HOTKEY=CTRL+ALT+S
 ```
 Supported modifiers: `CTRL`, `ALT`, `SHIFT` (case‑insensitive). If no modifier supplied, `CTRL` is assumed.
 

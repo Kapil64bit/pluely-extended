@@ -12,6 +12,35 @@ fn restart_app() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn hide_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Get the main window and hide it completely
+    if let Some(window) = app.get_webview_window("main")
+        .or_else(|| app.get_webview_window("pluely"))
+        .or_else(|| app.webview_windows().values().next().cloned())
+    {
+        // Move window completely off-screen and hide it
+        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: -32000, y: -32000 }))
+            .map_err(|e| e.to_string())?;
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) -> Result<(), String> {
+    // Get the main window and show it
+    if let Some(window) = app.get_webview_window("main")
+        .or_else(|| app.get_webview_window("pluely"))
+        .or_else(|| app.webview_windows().values().next().cloned())
+    {
+        // Move window back to visible position and show it
+        window::position_window_top_center(&window, 54).map_err(|e| e.to_string())?;
+        window.show().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -42,7 +71,7 @@ pub fn run() {
             }
         }
     }))
-    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, screenshot::invoke_area_screenshot])
+    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, hide_window, show_window, screenshot::invoke_area_screenshot])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
@@ -155,8 +184,8 @@ pub fn run() {
                 // Clone the AppHandle for the background thread
                 let ah = app.handle().clone();
 
-                // Parse configurable hotkey from env (format CTRL+H or just H; only supporting Ctrl+H now for simplicity)
-                let configured = std::env::var("PLUELY_HOTKEY").unwrap_or_else(|_| "CTRL+H".to_string());
+                // Parse configurable hotkey from env (format CTRL+ALT+S or just S; supporting Ctrl+Alt+S for screenshot)
+                let configured = std::env::var("PLUELY_HOTKEY").unwrap_or_else(|_| "CTRL+ALT+S".to_string());
                 let (hotkey_vk, hotkey_mods) = {
                     let upper = configured.to_ascii_uppercase();
                     let parts: Vec<&str> = upper.split('+').collect();
@@ -168,7 +197,7 @@ pub fn run() {
                         k if k.len()==1 => { key = Some(k.chars().next().unwrap() as u32); },
                         _ => {}
                     }}
-                    (key.unwrap_or('H' as u32), if mods==0 { 0x0002 } else { mods }) // default to CTRL if none provided
+                    (key.unwrap_or('S' as u32), if mods==0 { 0x0002 | 0x0001 } else { mods }) // default to CTRL+ALT if none provided
                 };
 
                 thread::spawn(move || {
@@ -184,7 +213,7 @@ pub fn run() {
                     // id 2: Ctrl+Alt+P (launch / focus existing instance - single-instance will bring to front)
                     // id 3: Ctrl+Alt+Shift+P (full restart)
                     // id 4: Ctrl+Alt+Q (quit application)
-                    // id 5: Configurable screenshot hotkey (default Ctrl+H)
+                    // id 5: Configurable screenshot hotkey (default Ctrl+Alt+S)
                     // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_ALT = 0x0001
                     let _ = unsafe { RegisterHotKey(0 as HWND, 1, (0x0002 | 0x0004) as u32, VK_L) }; // toggle
                     let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0001) as u32, 'P' as u32) }; // launch/focus

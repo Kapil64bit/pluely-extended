@@ -6,6 +6,8 @@ import {
   CopyIcon,
   MessageCircle,
   X,
+  EyeIcon,
+  EyeOffIcon,
 } from "lucide-react";
 import {
   Popover,
@@ -23,6 +25,7 @@ import { highlightCode } from "@/lib/highlight";
 import { Speech } from "./Speech";
 import { MessageHistory } from "../history";
 import { initScreenshotAI, requestAnswerFromScreenshot } from "@/lib/screenshot-ai";
+import { invoke } from "@tauri-apps/api/core";
 
 // Session-level set of processed screenshot signatures to suppress duplicate events
 const processedScreenshotSigs = new Set<string>();
@@ -51,16 +54,34 @@ export const Completion = () => {
     currentConversationId,
     conversationHistory,
     startNewConversation,
-    saveCurrentConversation,
+    // saveCurrentConversation, // Temporarily disabled for testing
   } = useCompletion();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toasts, setToasts] = useState<{ id: string; message: string }[]>([]);
+  const [isStealthMode, setIsStealthMode] = useState(false);
 
   const pushToast = (message: string) => {
     const id = Date.now().toString();
     setToasts((s) => [...s, { id, message }]);
     setTimeout(() => setToasts((s) => s.filter((t) => t.id !== id)), 1800);
+  };
+
+  const toggleStealthMode = async () => {
+    try {
+      if (isStealthMode) {
+        await invoke('show_window');
+        setIsStealthMode(false);
+        pushToast('Window visible');
+      } else {
+        await invoke('hide_window');
+        setIsStealthMode(true);
+        pushToast('Window hidden (stealth mode)');
+      }
+    } catch (error) {
+      console.error('Failed to toggle stealth mode:', error);
+      pushToast('Failed to toggle stealth mode');
+    }
   };
 
   // CodeBlock component handles async shiki highlighting and shows per-block copy button
@@ -267,12 +288,14 @@ export const Completion = () => {
           if (!existingPair) {
             // Defer save outside synchronous state mutation
             setTimeout(() => {
-              saveCurrentConversation(
-                screenshotMsg.content,
-                finalAssistant.content,
-                [],
-                undefined
-              );
+              console.log(`[DEBUG-${callbackId}] Skipping screenshot save for testing purposes`);
+              // Temporarily disabled for testing screenshot capture
+              // saveCurrentConversation(
+              //   screenshotMsg.content,
+              //   finalAssistant.content,
+              //   [],
+              //   undefined
+              // );
             }, 0);
           }
         }
@@ -416,6 +439,16 @@ export const Completion = () => {
                   currentConversationId={currentConversationId}
                   onStartNewConversation={startNewConversation}
                 />
+                {/* Stealth Mode Toggle */}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={toggleStealthMode}
+                  className="cursor-pointer"
+                  aria-label={isStealthMode ? "Exit stealth mode" : "Enter stealth mode"}
+                >
+                  {isStealthMode ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+                </Button>
                 {/* header-level copy removed; per-message copy buttons added below */}
                 <Button
                   size="icon"
