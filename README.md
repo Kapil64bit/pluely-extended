@@ -267,24 +267,22 @@ npm install
 npm run tauri dev
 ```
 
-### 🔁 Global Hotkey (Launch / Restart) on Windows
+### 🔁 Global Hotkeys (Windows – Automatic)
 
-To be able to re-launch or restart Pluely with a keyboard shortcut even when it is not currently running (without any always-on background process), use a Windows shortcut hotkey:
+Pluely sets up global hotkeys automatically on first run—no external script needed.
 
-1. Build or install Pluely and run it once normally.
-2. Run the helper script (PowerShell):
-	```powershell
-	pwsh -ExecutionPolicy Bypass -File .\scripts\create-hotkey-shortcut.ps1
-	```
-3. This creates a Start Menu shortcut: `Pluely (Hotkey Restart).lnk` with target `pluely.exe --restart`.
-4. Default hotkey requested: `Ctrl+Alt+Shift+P`. If Windows drops the Shift modifier, it will fall back to `Ctrl+Alt+P` (Explorer limitation).
-5. You can change the hotkey anytime: Right‑click the shortcut → Properties → Shortcut key.
+Hotkeys (Windows):
+- Ctrl+Alt+P — Launch or focus the app even when it's not running.
+- Ctrl+Alt+Shift+P — Full restart (when app is running).
+- Ctrl+Alt+Q — Quit the application (when app is running).
+- Ctrl+Shift+L — Existing toggle behavior (hide/show window style).
 
-What happens:
-- If Pluely is not running, the shortcut launches it.
-- If Pluely is running, launching with `--restart` triggers a safe restart via the single-instance plugin.
+Behavior:
+- On first run, Pluely creates a Start Menu shortcut (`Pluely (Hotkey).lnk`) bound to Ctrl+Alt+P. The Shift variants and quit hotkey are registered in‑process while the app is running.
+- Restart spawns a `--restart` instance in release builds; in dev builds the app reloads the webview to avoid stopping the dev server.
+- Quit emits a cleanup event and exits gracefully.
 
-No resident background exe or service is used, reducing the chance of triggering security software.
+You can still manually edit or remove the Start Menu shortcut (Right‑click → Properties). Removing it disables the global launch hotkey when the app is closed.
 
 
 ### Build for Production

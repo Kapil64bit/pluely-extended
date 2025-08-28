@@ -64,6 +64,41 @@ pub fn run() {
                 if !start_menu.as_os_str().is_empty() {
                     for seg in ["Microsoft","Windows","Start Menu","Programs"] { start_menu.push(seg); }
                     let shortcut_path = start_menu.join("Pluely (Hotkey).lnk");
+                    // Repair or remove legacy shortcut if it exists (old name used by older installer/script)
+                    let legacy = start_menu.join("Pluely (Hotkey Restart).lnk");
+                    if legacy.exists() {
+                        // Try to repair: load existing .lnk and re-save as the new name with no args
+                        use windows::Win32::System::Com::IPersistFile;
+                        use windows::Win32::UI::Shell::IShellLinkW;
+                        use windows::core::PCWSTR;
+                        let legacy_w: Vec<u16> = legacy.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+                        if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok() {
+                            unsafe {
+                                if let Ok(shell_link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) {
+                                    if let Ok(persist) = shell_link.cast::<IPersistFile>() {
+                                        if persist.Load(PCWSTR(legacy_w.as_ptr()), windows::Win32::System::Com::STGM(0)).is_ok() {
+                                            // Clear arguments and set hotkey to Ctrl+Alt+P
+                                            let args_w = wide("");
+                                            let _ = shell_link.SetArguments(PCWSTR(args_w.as_ptr()));
+                                            let no_shift: u16 = ((0x02 | 0x04) << 8) | 0x50; // Ctrl+Alt+P
+                                            let _ = shell_link.SetHotkey(no_shift);
+                                            // Save as new shortcut name
+                                            let new_path = shortcut_path.to_string_lossy().to_string();
+                                            let new_w = wide(&new_path);
+                                            let _ = persist.Save(PCWSTR(new_w.as_ptr()), true);
+                                            let _ = std::fs::remove_file(&legacy);
+                                        } else {
+                                            let _ = std::fs::remove_file(&legacy);
+                                        }
+                                    }
+                                } else {
+                                    let _ = std::fs::remove_file(&legacy);
+                                }
+                            }
+                        } else {
+                            let _ = std::fs::remove_file(&legacy);
+                        }
+                    }
                     let marker = start_menu.join(".pluely_hotkey_created");
                     // Only attempt once (marker) or if shortcut missing.
                     if !marker.exists() || !shortcut_path.exists() {
@@ -74,15 +109,14 @@ pub fn run() {
                                 unsafe {
                                     // Create ShellLink
                                     if let Ok(shell_link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) {
-                                        // Ensure Target is the executable only and Arguments is set separately to "--restart".
+                                        // Ensure Target is the executable only (no restart arg; restart handled via in-app hotkey).
                                         let path_str = exe.as_os_str().to_string_lossy().into_owned();
-                                        let args_str = "--restart";
-                                        eprintln!("Pluely: creating shortcut target='{}' args='{}'", path_str, args_str);
+                                        eprintln!("Pluely: creating shortcut target='{}'", path_str);
                                         let path_w = wide(&path_str);
                                         let _ = shell_link.SetPath(PCWSTR(path_w.as_ptr()));
-                                        let args_w = wide(args_str);
-                                        let _ = shell_link.SetArguments(PCWSTR(args_w.as_ptr()));
-                                        let desc_w = wide("Pluely launch / restart via global hotkey");
+                                        // No arguments for plain launch
+                                        let _ = shell_link.SetArguments(PCWSTR([0u16].as_ptr()));
+                                        let desc_w = wide("Pluely launch / focus (restart: Ctrl+Alt+Shift+P)");
                                         let _ = shell_link.SetDescription(PCWSTR(desc_w.as_ptr()));
                                         // Attempt to set working directory
                                         if let Some(dir) = exe.parent() { let wd_w = wide(&dir.to_string_lossy()); let _ = shell_link.SetWorkingDirectory(PCWSTR(wd_w.as_ptr())); }
@@ -91,8 +125,8 @@ pub fn run() {
                                         // Set hotkey: Windows expects LOWORD = key code, HIWORD = modifiers. Ctrl=0x02, Alt=0x04, Shift=0x01 per .lnk HOTKEYF flags.
                                         // We want Ctrl+Alt+Shift+P. Virtual key for P is 0x50.
                                         // Format: (modifiers << 8) | vk
-                                        // Use Ctrl+Alt+P for the .lnk hotkey (Shift often gets dropped by Windows); set only the no-shift value.
-                                        let no_shift: u16 = ((0x02 | 0x04) << 8) | 0x50; // Ctrl+Alt+P
+                                        // Use Ctrl+Alt+P for the .lnk hotkey (launch/focus). Shift variant handled inside app for restart.
+                                        let no_shift: u16 = ((0x02 | 0x04) << 8) | 0x50; // Ctrl+Alt+P modifiers: Ctrl(0x02) Alt(0x04)
                                         let _ = shell_link.SetHotkey(no_shift);
                                         // Persist to file
                                         if let Ok(persist) = shell_link.cast::<IPersistFile>() {
@@ -129,10 +163,14 @@ pub fn run() {
 
                     // Hotkeys:
                     // id 1: Ctrl+Shift+L (existing behavior toggle)
-                    // id 2: Ctrl+Alt+P (restart or launch via second instance semantics)
+                    // id 2: Ctrl+Alt+P (launch / focus existing instance - single-instance will bring to front)
+                    // id 3: Ctrl+Alt+Shift+P (full restart)
+                    // id 4: Ctrl+Alt+Q (quit application)
                     // MOD_CONTROL = 0x0002, MOD_SHIFT = 0x0004, MOD_ALT = 0x0001
                     let _ = unsafe { RegisterHotKey(0 as HWND, 1, (0x0002 | 0x0004) as u32, VK_L) }; // toggle
-                    let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0001) as u32, 'P' as u32) }; // restart
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 2, (0x0002 | 0x0001) as u32, 'P' as u32) }; // launch/focus
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 3, (0x0002 | 0x0001 | 0x0004) as u32, 'P' as u32) }; // restart
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 4, (0x0002 | 0x0001) as u32, 'Q' as u32) }; // quit
 
                     // Message loop to listen for WM_HOTKEY
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
@@ -168,17 +206,48 @@ pub fn run() {
                                     }
                                     }
                             } else if id == 2 {
-                                // Restart: spawn self with --restart (will trigger single-instance callback)
+                                // Plain launch/focus: spawn another instance with no args -> single-instance handler focuses existing
                                 if let Ok(exe) = std::env::current_exe() {
-                                    let _ = Command::new(exe).arg("--restart").spawn();
+                                    let _ = Command::new(exe).spawn();
                                 }
-                }
+                            } else if id == 3 {
+                                // Restart: in development we shouldn't exit the cargo/dev wrapper because it will stop the
+                                // frontend dev server. So in debug builds, just reload the main window. In release builds,
+                                // spawn a new process with --restart to trigger single-instance restart.
+                                if cfg!(debug_assertions) {
+                                    if let Some(win) = ah.get_webview_window("main")
+                                        .or_else(|| ah.get_webview_window("pluely"))
+                                        .or_else(|| ah.webview_windows().values().next().cloned())
+                                    {
+                                        // Emit pre-restart event for any cleanup, then reload the webview
+                                        let _ = ah.emit("pluely://pre-restart", ());
+                                        let _ = win.eval("window.location.reload()");
+                                    }
+                                } else {
+                                    if let Ok(exe) = std::env::current_exe() {
+                                        let _ = Command::new(exe).arg("--restart").spawn();
+                                    }
+                                }
+                            } else if id == 4 {
+                                // Quit: emit pre-restart-like event for cleanup and then exit gracefully
+                                let _ = ah.emit("pluely://pre-restart", ());
+                                // Try to close main window(s) first
+                                if let Some(win) = ah.get_webview_window("main")
+                                    .or_else(|| ah.get_webview_window("pluely"))
+                                    .or_else(|| ah.webview_windows().values().next().cloned())
+                                {
+                                    let _ = win.close();
+                                }
+                                // Then exit the app
+                                ah.exit(0);
+                            }
                         }
                     }
 
             // Unregister hotkey when loop exits
             let _ = unsafe { UnregisterHotKey(0 as HWND, 1) };
             let _ = unsafe { UnregisterHotKey(0 as HWND, 2) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 3) };
                 });
             }
             Ok(())

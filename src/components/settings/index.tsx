@@ -132,13 +132,14 @@ export const Settings = () => {
 
       {/* Settings Panel */}
       <PopoverContent
-        align="end"
+        align="center"
         side="bottom"
-        className="select-none w-screen p-0 border overflow-hidden border-input/50"
+        // center and constrain inner width so buttons don't get clipped at narrow edges
+        className="w-screen p-0 border shadow-lg overflow-hidden"
         sideOffset={8}
       >
-        <ScrollArea className="h-[calc(100vh-6.5rem)]">
-          <div className="p-6 space-y-4">
+        <ScrollArea className="h-[calc(100vh-8rem)]">
+          <div className="max-w-2xl mx-auto p-4 space-y-4">
             {/* Configuration Header */}
             <div className="border-b border-input/50 pb-2">
               <h1 className="text-lg font-bold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
