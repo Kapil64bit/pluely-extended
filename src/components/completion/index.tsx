@@ -8,6 +8,7 @@ import {
   X,
   EyeIcon,
   EyeOffIcon,
+  BrainIcon,
 } from "lucide-react";
 import {
   Popover,
@@ -27,6 +28,11 @@ import { MessageHistory } from "../history";
 import { initScreenshotAI, requestAnswerFromScreenshot } from "@/lib/screenshot-ai";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { EnhancedResponseRenderer } from "./enhanced-response-renderer";
+import { ResponseMode, EnhancedResponse } from "@/types/enhanced-response";
+import { ModeIndicator } from "@/components/mode-indicator";
+import { modeManager } from "@/lib/mode-manager";
+import { useEnhancedResponses } from "@/hooks/use-enhanced-responses";
 
 // Session-level set of processed screenshot signatures to suppress duplicate events
 const processedScreenshotSigs = new Set<string>();
@@ -61,11 +67,74 @@ export const Completion = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toasts, setToasts] = useState<{ id: string; message: string }[]>([]);
   const [isStealthMode, setIsStealthMode] = useState(false);
+  
+  // Enhanced response management
+  const {
+    responses: enhancedResponses,
+    classifications: classificationResults,
+    currentMode,
+    isEnhancedMode: showEnhancedUI,
+    addEnhancedResponse,
+    addClassificationResult,
+    setCurrentMode,
+    toggleEnhancedMode,
+    clearResponses
+  } = useEnhancedResponses();
 
   const pushToast = (message: string) => {
     const id = Date.now().toString();
     setToasts((s) => [...s, { id, message }]);
     setTimeout(() => setToasts((s) => s.filter((t) => t.id !== id)), 1800);
+  };
+
+  const enhancedSubmit = async () => {
+    if (!input.trim() || isLoading) return;
+
+    // Check if enhanced mode is enabled
+    if (showEnhancedUI) {
+      try {
+        // Import enhanced processor dynamically to avoid circular dependencies
+        const { enhancedResponseProcessor } = await import('@/lib/enhanced-response-processor');
+        
+        // Create a temporary message ID for tracking
+        const tempId = `msg_${Date.now()}_enhanced`;
+        
+        // Process with enhanced pipeline
+        const processorResult = await enhancedResponseProcessor.processText(input.trim(), {
+          enableAutoMode: true,
+          enableLearning: true,
+          enableValidation: true,
+          priority: 'normal'
+        });
+
+        // Store enhanced response
+        addEnhancedResponse(tempId, processorResult.response);
+
+        // Store classification result
+        if (processorResult.metadata.classificationUsed) {
+          addClassificationResult(tempId, {
+            recommendedMode: processorResult.mode,
+            confidence: processorResult.confidence,
+            reasoning: 'Enhanced text processing'
+          });
+        }
+
+        // Update current mode
+        setCurrentMode(processorResult.mode);
+        
+        pushToast(`Enhanced processing: ${processorResult.mode.replace('_', ' ').toUpperCase()}`);
+        
+        // Fall back to regular submit for now to maintain compatibility
+        submit();
+        
+      } catch (error) {
+        console.error('Enhanced processing failed, falling back to regular submit:', error);
+        submit();
+      }
+    } else {
+      // Use regular submit
+      submit();
+    }
   };
 
   const toggleStealthMode = async () => {
@@ -136,7 +205,7 @@ export const Completion = () => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (!isLoading && input.trim()) {
-        submit();
+        enhancedSubmit();
       }
     }
   };
@@ -247,12 +316,14 @@ export const Completion = () => {
         error: null,
       }));
 
-      // Basic streaming into conversation by appending to response state via hook's mechanisms
+      // Enhanced streaming with classification and mode detection
       let aggregated = "";
       await requestAnswerFromScreenshot(b64, {
         provider,
         model,
         apiKey,
+        useEnhancedMode: true,
+        usePipeline: true,
         onChunk: (c) => {
           console.log("[completion] Received chunk:", c);
           aggregated += c;
@@ -263,6 +334,18 @@ export const Completion = () => {
               m.id === assistantTempId ? { ...m, content: aggregated } : m
             ),
           }));
+        },
+        onClassification: (result) => {
+          console.log("[completion] Classification result:", result);
+          addClassificationResult(assistantTempId, result);
+          setCurrentMode(result.recommendedMode || ResponseMode.THEORETICAL);
+          pushToast(`Detected: ${result.recommendedMode?.replace('_', ' ').toUpperCase()} (${Math.round(result.confidence * 100)}%)`);
+        },
+        onProcessingComplete: (processorResult) => {
+          console.log("[completion] Enhanced processing complete:", processorResult);
+          if (processorResult.response) {
+            addEnhancedResponse(assistantTempId, processorResult.response);
+          }
         },
         onError: (e) => {
           console.error("[completion] Screenshot AI error:", e);
@@ -349,7 +432,7 @@ export const Completion = () => {
             const text = await navigator.clipboard.readText();
             if (text && text.trim()) {
               setInput(text.trim());
-              submit();
+              enhancedSubmit();
               pushToast("Analyzing clipboard");
             } else {
               pushToast("Clipboard empty");
@@ -403,7 +486,23 @@ export const Completion = () => {
       );
     })();
     return () => { unsubs.forEach(u => { try { u(); } catch {} }); };
-  }, [enableVAD, setEnableVAD, submit, setInput]);
+  }, [enableVAD, setEnableVAD, enhancedSubmit, setInput]);
+
+  // Mode Manager Integration
+  useEffect(() => {
+    const updateCurrentMode = () => {
+      const mode = modeManager.getCurrentMode();
+      setCurrentMode(mode);
+    };
+
+    // Initial mode
+    updateCurrentMode();
+
+    // Listen for mode changes
+    const interval = setInterval(updateCurrentMode, 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
   // Auto Clipboard Monitoring
   useEffect(() => {
@@ -432,7 +531,7 @@ export const Completion = () => {
         lastContent = txt;
         lastRun = now;
         setInput(txt);
-        submit();
+        enhancedSubmit();
         pushToast('Auto-analyzing clipboard');
       } catch (e) {
         // Silent; clipboard read may fail without permission
@@ -440,7 +539,7 @@ export const Completion = () => {
     };
     interval = setInterval(poll, 1500); // poll every 1.5s
     return () => clearInterval(interval);
-  }, [submit, setInput]);
+  }, [enhancedSubmit, setInput]);
 
   return (
     <>
@@ -456,7 +555,7 @@ export const Completion = () => {
         <PopoverTrigger asChild>
           {isOpenAIKeyAvailable() && enableVAD ? (
             <Speech
-              submit={submit}
+              submit={enhancedSubmit}
               setState={setState}
               setEnableVAD={setEnableVAD}
             />
@@ -544,13 +643,33 @@ export const Completion = () => {
             sideOffset={8}
           >
             <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/20 backdrop-blur-sm">
-              <h3 className="font-semibold text-sm">Conversation</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="font-semibold text-sm">Conversation</h3>
+                {showEnhancedUI && (
+                  <ModeIndicator 
+                    compact={true}
+                  />
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <MessageHistory
                   conversationHistory={conversationHistory}
                   currentConversationId={currentConversationId}
                   onStartNewConversation={startNewConversation}
                 />
+                {/* Enhanced UI Toggle */}
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => {
+                    toggleEnhancedMode();
+                    pushToast(showEnhancedUI ? "Enhanced UI disabled" : "Enhanced UI enabled");
+                  }}
+                  className="cursor-pointer"
+                  aria-label={showEnhancedUI ? "Disable enhanced UI" : "Enable enhanced UI"}
+                >
+                  <BrainIcon className={`h-4 w-4 ${showEnhancedUI ? 'text-primary' : 'text-muted-foreground'}`} />
+                </Button>
                 {/* Stealth Mode Toggle */}
                 <Button
                   size="icon"
@@ -678,7 +797,28 @@ export const Completion = () => {
                         </span>
                       </div>
 
-                      {structured && isAssistant ? (
+                      {/* Enhanced Response Rendering */}
+                      {enhancedResponses[msg.id] && isAssistant ? (
+                        <div className="enhanced-response-container">
+                          <EnhancedResponseRenderer
+                            response={enhancedResponses[msg.id]}
+                            onCopy={(content, type) => {
+                              navigator.clipboard.writeText(content);
+                              pushToast(`${type} copied`);
+                            }}
+                            showMetadata={false}
+                          />
+                          {classificationResults[msg.id] && (
+                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                <span>Classification:</span>
+                                <span className="font-medium">{classificationResults[msg.id].recommendedMode?.replace('_', ' ')}</span>
+                                <span>({Math.round(classificationResults[msg.id].confidence * 100)}%)</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : structured && isAssistant ? (
                         <div className="space-y-3">
                           {/* Header / Summary */}
                           {structured.responseType === 'theoretical' && (

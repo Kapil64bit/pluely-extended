@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod window;
 mod screenshot;
+mod hotkey;
 use tauri::{Manager, Emitter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -97,10 +98,27 @@ pub fn run() {
             }
         }
     }))
-    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, hide_window, show_window, screenshot::invoke_area_screenshot, screenshot::invoke_fullscreen_screenshot, emit_area_screenshot])
+    .invoke_handler(tauri::generate_handler![
+        greet, 
+        get_app_version, 
+        restart_app, 
+        hide_window, 
+        show_window, 
+        screenshot::invoke_area_screenshot, 
+        screenshot::invoke_fullscreen_screenshot, 
+        emit_area_screenshot,
+        hotkey::register_hotkey,
+        hotkey::unregister_hotkey,
+        hotkey::unregister_all_hotkeys,
+        hotkey::is_hotkey_available,
+        hotkey::get_registered_hotkeys
+    ])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
+            
+            // Setup mode switching hotkeys
+            hotkey::setup_mode_hotkeys(app.handle().clone());
 
             // Build tray icon & menu (Tauri v2 uses tray_icon crate under the hood)
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]

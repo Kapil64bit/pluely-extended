@@ -2786,6 +2786,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "image",
+ "lazy_static",
  "once_cell",
  "serde",
  "serde_json",
