@@ -13,6 +13,10 @@ const defaultSettings: SettingsState = {
   modelsFetchError: null,
   openAiApiKey: "",
   isOpenAiApiKeySubmitted: false,
+  autoClipboardEnabled: false,
+  clipboardMinLength: 12,
+  clipboardKeywords: "",
+  clipboardDebounceMs: 8000,
 };
 
 export const loadSettingsFromStorage = (): SettingsState => {

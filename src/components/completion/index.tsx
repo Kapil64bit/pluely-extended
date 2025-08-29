@@ -26,6 +26,7 @@ import { Speech } from "./Speech";
 import { MessageHistory } from "../history";
 import { initScreenshotAI, requestAnswerFromScreenshot } from "@/lib/screenshot-ai";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 // Session-level set of processed screenshot signatures to suppress duplicate events
 const processedScreenshotSigs = new Set<string>();
@@ -329,6 +330,117 @@ export const Completion = () => {
     // Cleanup function
     return cleanup;
   }, []);
+
+  // Global hotkey event listeners from backend (voice toggle, clipboard analyze, history toggle, model cycle)
+  useEffect(() => {
+    const unsubs: (() => void)[] = [];
+    (async () => {
+      // Voice toggle
+      unsubs.push(
+        await listen("pluely://hotkey/voice-toggle", () => {
+          setEnableVAD((prev) => !prev);
+          pushToast("Voice " + (!enableVAD ? "enabled" : "disabled"));
+        })
+      );
+      // Clipboard analyze
+      unsubs.push(
+        await listen("pluely://hotkey/clipboard-analyze", async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text && text.trim()) {
+              setInput(text.trim());
+              submit();
+              pushToast("Analyzing clipboard");
+            } else {
+              pushToast("Clipboard empty");
+            }
+          } catch (e) {
+            console.error("Clipboard read failed", e);
+            pushToast("Clipboard read failed");
+          }
+        })
+      );
+      // History toggle (emits custom window event to existing MessageHistory popover trigger)
+      unsubs.push(
+        await listen("pluely://hotkey/history-toggle", () => {
+          const evt = new Event("pluely-history-toggle");
+          window.dispatchEvent(evt);
+        })
+      );
+      // Model cycle: rotate through provider.availableModels (if any) or fallback set
+      unsubs.push(
+        await listen("pluely://hotkey/model-cycle", () => {
+          try {
+            const settingsRaw = localStorage.getItem("settings");
+            if (!settingsRaw) return;
+            const settings = JSON.parse(settingsRaw);
+            const { selectedProvider, availableModels = [], selectedModel, customModel } = settings;
+            if (!selectedProvider) return;
+            let models: string[] = availableModels.map((m: string) => m.replace(/^models\//, ""));
+            if (!models.length) {
+              // fallback curated list per provider
+              const fallback: Record<string,string[]> = {
+                openai: ["gpt-5", "gpt-4.1", "gpt-4o-mini"],
+                claude: ["claude-sonnet-4-20250514", "claude-opus-4", "claude-haiku-4"],
+                grok: ["grok-4", "grok-3", "grok-vision"],
+                gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash"]
+              };
+              models = fallback[selectedProvider] || [];
+            }
+            if (!models.length) return;
+            const current = selectedModel || customModel || models[0];
+            const idx = models.indexOf(current);
+            const next = models[(idx + 1) % models.length];
+            const newSettings = { ...settings, selectedModel: next, customModel: "" };
+            localStorage.setItem("settings", JSON.stringify(newSettings));
+            pushToast(`Model: ${next}`);
+            // notify in-app components if they subscribe to storage events
+            window.dispatchEvent(new StorageEvent("storage", { key: "settings" } as any));
+          } catch (e) {
+            console.error("Model cycle failed", e);
+          }
+        })
+      );
+    })();
+    return () => { unsubs.forEach(u => { try { u(); } catch {} }); };
+  }, [enableVAD, setEnableVAD, submit, setInput]);
+
+  // Auto Clipboard Monitoring
+  useEffect(() => {
+    let interval: any;
+    let lastContent = "";
+    let lastRun = 0;
+    const poll = async () => {
+      try {
+        const rawSettings = localStorage.getItem('settings');
+        if (!rawSettings) return;
+        const settings = JSON.parse(rawSettings);
+        if (!settings.autoClipboardEnabled) return;
+        const now = Date.now();
+        const cooldown = settings.clipboardDebounceMs || 8000;
+        if (now - lastRun < cooldown) return;
+        const txt = await navigator.clipboard.readText();
+        if (!txt) return;
+        if (txt === lastContent) return;
+        if (settings.clipboardMinLength && txt.trim().length < settings.clipboardMinLength) return;
+        if (settings.clipboardKeywords) {
+          const kws = settings.clipboardKeywords.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+            if (kws.length && !kws.some((k: string) => txt.toLowerCase().includes(k))) return;
+        }
+        // Basic heuristic: avoid huge pastes (>10k chars)
+        if (txt.length > 10000) return;
+        lastContent = txt;
+        lastRun = now;
+        setInput(txt);
+        submit();
+        pushToast('Auto-analyzing clipboard');
+      } catch (e) {
+        // Silent; clipboard read may fail without permission
+      }
+    };
+    interval = setInterval(poll, 1500); // poll every 1.5s
+    return () => clearInterval(interval);
+  }, [submit, setInput]);
 
   return (
     <>

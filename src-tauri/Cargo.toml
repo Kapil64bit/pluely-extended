@@ -26,7 +26,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 chrono = { version = "0.4", features = ["std"] }
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-updater = "2"  # Move this here
 winapi = { version = "0.3", features = ["winuser"] }

@@ -2,6 +2,8 @@
 mod window;
 mod screenshot;
 use tauri::{Manager, Emitter};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::process::Command;
 
 #[tauri::command]
@@ -50,9 +52,33 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[tauri::command]
+fn emit_area_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    // Spawn thread so we don't block invoke handler / UI
+    std::thread::spawn(move || {
+        println!("[backend] emit_area_screenshot invoked - starting capture thread");
+        if let Ok(Some(b64)) = crate::screenshot::invoke_area_screenshot() {
+            println!("[backend] emit_area_screenshot captured screenshot length={} - emitting event", b64.len());
+            if let Err(e) = app.emit("pluely://screenshot-captured", b64) {
+                println!("[backend] emit_area_screenshot failed to emit event: {:?}", e);
+            }
+        } else {
+            println!("[backend] emit_area_screenshot capture returned None or Err");
+        }
+    });
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Shared hidden state for tray toggling (best-effort)
+    #[derive(Default, Clone)]
+    struct UiState { hidden: Arc<AtomicBool> }
+
+    let ui_state = UiState::default();
+
     let builder = tauri::Builder::default()
+    .manage(ui_state.clone())
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -71,10 +97,72 @@ pub fn run() {
             }
         }
     }))
-    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, hide_window, show_window, screenshot::invoke_area_screenshot])
+    .invoke_handler(tauri::generate_handler![greet, get_app_version, restart_app, hide_window, show_window, screenshot::invoke_area_screenshot, screenshot::invoke_fullscreen_screenshot, emit_area_screenshot])
         .setup(|app| {
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
+
+            // Build tray icon & menu (Tauri v2 uses tray_icon crate under the hood)
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+            {
+                use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    // Build menu items
+                    let toggle_window = MenuItemBuilder::new("Show / Hide Window").id("toggle_window").build(&app_handle).expect("toggle_window");
+                    let toggle_voice = MenuItemBuilder::new("Toggle Voice").id("toggle_voice").build(&app_handle).expect("toggle_voice");
+                    let analyze_clip = MenuItemBuilder::new("Analyze Clipboard").id("clipboard_analyze").build(&app_handle).expect("clipboard");
+                    let cycle_model = MenuItemBuilder::new("Cycle Model").id("cycle_model").build(&app_handle).expect("cycle_model");
+                    let screenshot_item = MenuItemBuilder::new("Capture Screenshot").id("screenshot").build(&app_handle).expect("screenshot");
+                    let restart_item = MenuItemBuilder::new("Restart").id("restart").build(&app_handle).expect("restart");
+                    let quit_item = MenuItemBuilder::new("Quit").id("quit").build(&app_handle).expect("quit");
+
+                    let menu = MenuBuilder::new(&app_handle)
+                        .item(&toggle_window)
+                        .item(&toggle_voice)
+                        .item(&analyze_clip)
+                        .item(&cycle_model)
+                        .item(&screenshot_item)
+                        .separator()
+                        .item(&restart_item)
+                        .item(&quit_item)
+                        .build()
+                        .expect("tray menu");
+
+                    let _tray = TrayIconBuilder::new()
+                        .menu(&menu)
+                        .on_menu_event(|tray, event| {
+                            let id = event.id().as_ref();
+                            match id {
+                                "toggle_window" => {
+                                    let state_arc = tray.app_handle().state::<UiState>().hidden.clone();
+                                    let hidden = state_arc.load(Ordering::SeqCst);
+                                    if hidden { let _ = show_window(tray.app_handle().clone()); } else { let _ = hide_window(tray.app_handle().clone()); }
+                                    state_arc.store(!hidden, Ordering::SeqCst);
+                                },
+                                "toggle_voice" => { let _ = tray.app_handle().emit("pluely://hotkey/voice-toggle", ()); },
+                                "clipboard_analyze" => { let _ = tray.app_handle().emit("pluely://hotkey/clipboard-analyze", ()); },
+                                "cycle_model" => { let _ = tray.app_handle().emit("pluely://hotkey/model-cycle", ()); },
+                                "screenshot" => { let ah = tray.app_handle().clone(); std::thread::spawn(move || { if let Ok(Some(b64)) = crate::screenshot::invoke_area_screenshot() { let _ = ah.emit("pluely://screenshot-captured", b64); } }); },
+                                "restart" => { let _ = restart_app(); },
+                                "quit" => { tray.app_handle().exit(0); },
+                                _ => {}
+                            }
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if matches!(event, TrayIconEvent::Click { .. }) {
+                                // Simple toggle on click
+                                let state_arc = tray.app_handle().state::<UiState>().hidden.clone();
+                                let hidden = state_arc.load(Ordering::SeqCst);
+                                if hidden { let _ = show_window(tray.app_handle().clone()); } else { let _ = hide_window(tray.app_handle().clone()); }
+                                state_arc.store(!hidden, Ordering::SeqCst);
+                            }
+                        })
+                        .build(&app_handle)
+                        .expect("tray icon");
+                });
+            }
 
             // On Windows, create (idempotently) a Start Menu shortcut with a global hotkey so user can relaunch
             // the app via Ctrl+Alt+Shift+P (Windows may degrade to Ctrl+Alt+P). This removes the need for an external script.
@@ -220,6 +308,16 @@ pub fn run() {
                     let _ = unsafe { RegisterHotKey(0 as HWND, 3, (0x0002 | 0x0001 | 0x0004) as u32, 'P' as u32) }; // restart
                     let _ = unsafe { RegisterHotKey(0 as HWND, 4, (0x0002 | 0x0001) as u32, 'Q' as u32) }; // quit
                     let _ = unsafe { RegisterHotKey(0 as HWND, 5, hotkey_mods, hotkey_vk) }; // screenshot
+                    // id 6: Ctrl+Alt+V (voice activation toggle)
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 6, (0x0002 | 0x0001) as u32, 'V' as u32) };
+                    // id 7: Ctrl+Alt+C (clipboard quick analysis)
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 7, (0x0002 | 0x0001) as u32, 'C' as u32) };
+                    // id 8: Ctrl+Alt+H (toggle conversation history popover)
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 8, (0x0002 | 0x0001) as u32, 'H' as u32) };
+                    // id 9: Ctrl+Alt+M (cycle AI model)
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 9, (0x0002 | 0x0001) as u32, 'M' as u32) };
+                    // id 10: Ctrl+Alt+X (alternative screenshot hotkey)
+                    let _ = unsafe { RegisterHotKey(0 as HWND, 10, (0x0002 | 0x0001) as u32, 'X' as u32) };
 
                     // Message loop to listen for WM_HOTKEY
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
@@ -307,6 +405,36 @@ pub fn run() {
                                         println!("[backend] Screenshot capture failed or returned None");
                                     }
                                 });
+                            } else if id == 6 {
+                                // Voice activation toggle
+                                let _ = ah.emit("pluely://hotkey/voice-toggle", ());
+                            } else if id == 7 {
+                                // Clipboard quick analysis request
+                                let _ = ah.emit("pluely://hotkey/clipboard-analyze", ());
+                            } else if id == 8 {
+                                // Toggle conversation history
+                                let _ = ah.emit("pluely://hotkey/history-toggle", ());
+                            } else if id == 9 {
+                                // Cycle model
+                                let _ = ah.emit("pluely://hotkey/model-cycle", ());
+                            } else if id == 10 {
+                                // Alternative screenshot hotkey - FULLSCREEN capture (same processing as area screenshot)
+                                let ah_inner = ah.clone();
+                                println!("[backend] Hotkey 10 (Ctrl+Alt+X) pressed - initiating FULLSCREEN screenshot capture");
+                                std::thread::spawn(move || {
+                                    println!("[backend] Fullscreen screenshot thread started");
+                                    if let Ok(Some(b64)) = screenshot::invoke_fullscreen_screenshot() {
+                                        println!("[backend] Fullscreen screenshot capture successful, base64 length: {}", b64.len());
+                                        println!("[backend] Emitting Tauri event 'pluely://screenshot-captured'");
+                                        let emit_result = ah_inner.emit("pluely://screenshot-captured", b64);
+                                        match emit_result {
+                                            Ok(_) => println!("[backend] Tauri event emitted successfully"),
+                                            Err(e) => println!("[backend] Failed to emit Tauri event: {:?}", e),
+                                        }
+                                    } else {
+                                        println!("[backend] Fullscreen screenshot capture failed or returned None");
+                                    }
+                                });
                             }
                         }
                     }
@@ -317,12 +445,15 @@ pub fn run() {
             let _ = unsafe { UnregisterHotKey(0 as HWND, 3) };
             let _ = unsafe { UnregisterHotKey(0 as HWND, 4) };
             let _ = unsafe { UnregisterHotKey(0 as HWND, 5) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 6) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 7) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 8) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 9) };
+            let _ = unsafe { UnregisterHotKey(0 as HWND, 10) };
                 });
             }
             Ok(())
         });
-
-    // Add macOS-specific permissions plugin
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_plugin_macos_permissions::init());
 

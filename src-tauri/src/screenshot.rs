@@ -14,7 +14,7 @@ mod platform {
     use once_cell::sync::Lazy;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM, COLORREF};
     use windows::Win32::Graphics::Gdi::{BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, SelectObject, SRCCOPY, HBITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, GetDC, ReleaseDC};
-    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, TranslateMessage, DispatchMessageW, DefWindowProcW, PostQuitMessage, RegisterClassW, CreateWindowExW, ShowWindow, SetForegroundWindow, PostMessageW, WNDCLASSW, CS_HREDRAW, CS_VREDRAW, MSG, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_LBUTTONUP, WM_KEYDOWN, WM_DESTROY, SW_SHOW, WS_POPUP, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_NOREDIRECTIONBITMAP, LWA_ALPHA, GetSystemMetrics, SetLayeredWindowAttributes, DestroyWindow, SM_CXSCREEN, SM_CYSCREEN, HMENU, WM_SETCURSOR, LoadCursorW, SetCursor, IDC_ARROW};
+    use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, TranslateMessage, DispatchMessageW, DefWindowProcW, PostQuitMessage, RegisterClassW, CreateWindowExW, ShowWindow, SetWindowPos, PostMessageW, WNDCLASSW, CS_HREDRAW, CS_VREDRAW, MSG, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_LBUTTONUP, WM_KEYDOWN, WM_DESTROY, SW_SHOWNOACTIVATE, WS_POPUP, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_NOREDIRECTIONBITMAP, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT, LWA_ALPHA, GetSystemMetrics, SetLayeredWindowAttributes, DestroyWindow, SM_CXSCREEN, SM_CYSCREEN, HMENU, WM_SETCURSOR, LoadCursorW, SetCursor, IDC_ARROW, SWP_NOACTIVATE, SWP_SHOWWINDOW, HWND_TOPMOST};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::core::PCWSTR;
     use image::{RgbaImage, ImageEncoder};
@@ -89,7 +89,7 @@ mod platform {
 
             // Remove WS_EX_TRANSPARENT so we can receive mouse events.
                 let hwnd = CreateWindowExW(
-                    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+                    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
                     PCWSTR(class_name.as_ptr()),
                     PCWSTR(class_name.as_ptr()),
                     WS_POPUP,
@@ -102,8 +102,15 @@ mod platform {
             // Use a near-transparent window; specify a COLORREF (0) explicitly.
             let alpha: u8 = 40; // more visible for debugging
             let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            // Ensure overlay is topmost but never activated
+            let _ = SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0, 0, 0, 0,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW
+            );
+            // Do NOT call SetForegroundWindow or SetFocus anywhere for overlay
             println!("[screenshot] Overlay window shown and foregrounded");
             // Keep default arrow cursor
             if let Ok(hcursor) = LoadCursorW(None, IDC_ARROW) {
@@ -170,11 +177,125 @@ mod platform {
         }
     }
 
-    pub fn capture_base64_png() -> Option<String> {
-        use std::fs::File;
-        use std::io::BufWriter;
+    fn capture_fullscreen() -> Option<RgbaImage> {
+        unsafe {
+            let screen_w = GetSystemMetrics(SM_CXSCREEN);
+            let screen_h = GetSystemMetrics(SM_CYSCREEN);
+
+            let hdc_screen = GetDC(HWND(0));
+            if hdc_screen.0 == 0 { return None; }
+
+            let hdc_mem = CreateCompatibleDC(hdc_screen);
+            let hbmp = CreateCompatibleBitmap(hdc_screen, screen_w, screen_h);
+            let prev = SelectObject(hdc_mem, HBITMAP(hbmp.0 as isize));
+
+            // Capture entire screen
+            let _ = BitBlt(hdc_mem, 0, 0, screen_w, screen_h, hdc_screen, 0, 0, SRCCOPY);
+
+            // Extract pixels
+            let mut bmi = BITMAPINFO::default();
+            bmi.bmiHeader = BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: screen_w,
+                biHeight: -screen_h, // top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            };
+
+            let buf_size = (screen_w * screen_h * 4) as usize;
+            let mut buf = vec![0u8; buf_size];
+            let got = GetDIBits(hdc_mem, hbmp, 0, screen_h as u32, Some(buf.as_mut_ptr() as *mut _), &mut bmi, DIB_RGB_COLORS);
+
+            // Cleanup
+            SelectObject(hdc_mem, prev);
+            let _ = DeleteObject(hbmp);
+            let _ = DeleteDC(hdc_mem);
+            ReleaseDC(HWND(0), hdc_screen);
+
+            if got == 0 { return None; }
+
+            // BGRA -> RGBA
+            for px in buf.chunks_exact_mut(4) { px.swap(0,2); }
+            let img = RgbaImage::from_raw(screen_w as u32, screen_h as u32, buf)?;
+            Some(img)
+        }
+    }
+
+    pub fn capture_fullscreen_base64_png() -> Option<String> {
         use chrono::Local;
         use std::path::Path;
+
+        println!("[screenshot] Starting fullscreen capture...");
+        let img = match capture_fullscreen() {
+            Some(img) => {
+                println!("[screenshot] Captured fullscreen image: {}x{}", img.width(), img.height());
+                img
+            }
+            None => {
+                println!("[screenshot] Fullscreen capture failed");
+                return None;
+            }
+        };
+
+        // Save PNG to screenshots/ with timestamp (relative to project root)
+        let now = Local::now();
+        let folder = Path::new("../screenshots"); // Go up from src-tauri to project root
+        if !folder.exists() {
+            if let Err(e) = std::fs::create_dir_all(folder) {
+                println!("[screenshot] Failed to create screenshots folder: {}", e);
+            }
+        }
+        let filename = folder.join(format!("fullscreen-{}.png", now.format("%Y%m%d-%H%M%S")));
+        println!("[screenshot] Attempting to save fullscreen to: {}", filename.display());
+
+        use std::fs::File;
+        use std::io::BufWriter;
+
+        match File::create(&filename) {
+            Ok(file) => {
+                let w = BufWriter::new(file);
+                match image::codecs::png::PngEncoder::new(w)
+                    .write_image(
+                        &img,
+                        img.width(),
+                        img.height(),
+                        image::ExtendedColorType::Rgba8,
+                    ) {
+                    Ok(_) => {
+                        println!("[screenshot] Successfully saved fullscreen to {}", filename.canonicalize().map(|p| p.display().to_string()).unwrap_or_else(|_| filename.display().to_string()));
+                    }
+                    Err(e) => {
+                        println!("[screenshot] Failed to encode PNG: {}", e);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                println!("[screenshot] Failed to create file {}: {}", filename.display(), e);
+                return None;
+            }
+        }
+
+        // Also return base64 for frontend
+        let mut bytes = Vec::new();
+        if image::codecs::png::PngEncoder::new(&mut bytes).write_image(&img, img.width(), img.height(), image::ExtendedColorType::Rgba8).is_ok() {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            println!("[screenshot] Generated fullscreen base64 data, length: {}", b64.len());
+            Some(b64)
+        } else {
+            println!("[screenshot] Failed to encode fullscreen base64");
+            None
+        }
+    }
+
+    pub fn capture_base64_png() -> Option<String> {
+        use chrono::Local;
+        use std::path::Path;
+        use std::fs::File;
+        use std::io::BufWriter;
+
         println!("[screenshot] Starting screenshot capture...");
         let img = match select_and_capture() {
             Some(img) => {
@@ -186,6 +307,7 @@ mod platform {
                 return None;
             }
         };
+
         // Save PNG to screenshots/ with timestamp (relative to project root)
         let now = Local::now();
         let folder = Path::new("../screenshots"); // Go up from src-tauri to project root
@@ -196,6 +318,7 @@ mod platform {
         }
         let filename = folder.join(format!("screenshot-{}.png", now.format("%Y%m%d-%H%M%S")));
         println!("[screenshot] Attempting to save to: {}", filename.display());
+
         match File::create(&filename) {
             Ok(file) => {
                 let w = BufWriter::new(file);
@@ -220,15 +343,16 @@ mod platform {
                 return None;
             }
         }
+
         // Also return base64 for frontend
         let mut bytes = Vec::new();
         if image::codecs::png::PngEncoder::new(&mut bytes).write_image(&img, img.width(), img.height(), image::ExtendedColorType::Rgba8).is_ok() {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             println!("[screenshot] Generated base64 data, length: {}", b64.len());
             Some(b64)
-        } else { 
+        } else {
             println!("[screenshot] Failed to encode base64");
-            None 
+            None
         }
     }
 }
@@ -242,5 +366,17 @@ pub fn invoke_area_screenshot() -> Result<Option<String>, String> {
     #[cfg(not(target_os = "windows"))]
     {
         Err("Area screenshot only implemented for Windows in this build".into())
+    }
+}
+
+#[tauri::command]
+pub fn invoke_fullscreen_screenshot() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Ok(platform::capture_fullscreen_base64_png())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Fullscreen screenshot only implemented for Windows in this build".into())
     }
 }

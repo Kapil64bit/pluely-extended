@@ -14,6 +14,7 @@ import { ModelSelection } from "./ModelSelection";
 import { Disclaimer } from "./Disclaimer";
 import { SystemPrompt } from "./SystemPrompt";
 import { Speech } from "./Speech";
+import { Input, Label } from "@/components";
 import {
   loadSettingsFromStorage,
   saveSettingsToStorage,
@@ -216,6 +217,58 @@ export const Settings = () => {
               value={settings.systemPrompt}
               onChange={(value) => updateSettings({ systemPrompt: value })}
             />
+
+            {/* Auto Clipboard Monitoring */}
+            <div className="space-y-3 border-t pt-4">
+              <h2 className="text-sm font-semibold">Auto Clipboard Monitor</h2>
+              <div className="flex items-center gap-2 text-xs">
+                <input
+                  id="autoClipboardEnabled"
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer"
+                  checked={!!settings.autoClipboardEnabled}
+                  onChange={(e) => updateSettings({ autoClipboardEnabled: e.target.checked })}
+                />
+                <Label htmlFor="autoClipboardEnabled" className="cursor-pointer">Enable continuous clipboard analysis (text only)</Label>
+              </div>
+              {settings.autoClipboardEnabled && (
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Min Length</Label>
+                    <Input
+                      type="number"
+                      min={4}
+                      value={settings.clipboardMinLength || 0}
+                      onChange={(e) => updateSettings({ clipboardMinLength: parseInt(e.target.value || '0', 10) })}
+                      className="h-8"
+                    />
+                    <p className="text-[10px] text-muted-foreground">Ignore shorter snippets</p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Cooldown (ms)</Label>
+                    <Input
+                      type="number"
+                      min={1000}
+                      step={500}
+                      value={settings.clipboardDebounceMs || 0}
+                      onChange={(e) => updateSettings({ clipboardDebounceMs: parseInt(e.target.value || '0', 10) })}
+                      className="h-8"
+                    />
+                    <p className="text-[10px] text-muted-foreground">Min gap between analyses</p>
+                  </div>
+                  <div className="col-span-2 space-y-1">
+                    <Label className="text-xs">Keywords (comma separated, optional)</Label>
+                    <Input
+                      placeholder="e.g. error, stacktrace, summarize"
+                      value={settings.clipboardKeywords || ''}
+                      onChange={(e) => updateSettings({ clipboardKeywords: e.target.value })}
+                      className="h-8"
+                    />
+                    <p className="text-[10px] text-muted-foreground">Only trigger if any keyword matches (case-insensitive)</p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="pb-4 flex items-center justify-center">

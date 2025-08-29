@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MessageSquareText, ChevronUp, ChevronDown } from "lucide-react";
 import {
   Popover,
@@ -23,6 +23,13 @@ export const MessageHistory = ({
   onStartNewConversation,
 }: MessageHistoryProps) => {
   const [isOpen, setIsOpen] = useState(false);
+
+  // Respond to global hotkey dispatch event
+  useEffect(() => {
+    const handler = () => setIsOpen(prev => !prev);
+    window.addEventListener('pluely-history-toggle', handler as any);
+    return () => window.removeEventListener('pluely-history-toggle', handler as any);
+  }, []);
 
   // Don't show the button if there's no conversation history
   if (!currentConversationId || conversationHistory.length === 0) {
